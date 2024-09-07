@@ -3248,6 +3248,10 @@ do_kill:
 
         pages_freed = find_and_kill_process(min_score_adj, NULL, &mi, &wi, &curr_tm, NULL);
 
+        if (pages_freed == 0 && min_score_adj == 0) {
+            lmkd_no_kill_candidates_hook();
+        }
+
         if (pages_freed == 0) {
             /* Rate limit kill reports when nothing was reclaimed */
             if (get_time_diff_ms(&last_report_tm, &curr_tm) < FAIL_REPORT_RLIMIT_MS) {
