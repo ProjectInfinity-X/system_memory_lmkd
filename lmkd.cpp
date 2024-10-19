@@ -94,6 +94,7 @@ static inline void trace_kill_end() {}
 #define PROC_STATUS_TGID_FIELD "Tgid:"
 #define PROC_STATUS_RSS_FIELD "VmRSS:"
 #define PROC_STATUS_SWAP_FIELD "VmSwap:"
+#define NODE_STATS_MARKER "  per-node stats"
 
 #define PERCEPTIBLE_APP_ADJ 200
 #define PREVIOUS_APP_ADJ 700
@@ -1859,6 +1860,15 @@ static int zoneinfo_parse(struct zoneinfo *zi) {
         int node_id;
         if (sscanf(line, "Node %d, zone %" STRINGIFY(LINE_MAX) "s", &node_id, zone_name) == 2) {
             if (!node || node->id != node_id) {
+                line = strtok_r(NULL, "\n", &save_ptr);
+                if (strncmp(line, NODE_STATS_MARKER, strlen(NODE_STATS_MARKER)) != 0) {
+                    /*
+                     * per-node stats are only present in the first non-empty zone of
+                     * the node.
+                     */
+                    continue;
+                }
+
                 /* new node is found */
                 if (node) {
                     node->zone_count = zone_idx + 1;
