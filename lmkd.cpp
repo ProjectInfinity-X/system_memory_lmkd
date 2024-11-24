@@ -211,6 +211,7 @@ static int mpevfd[VMPRESS_LEVEL_COUNT] = { -1, -1, -1 };
 static bool pidfd_supported;
 static int last_kill_pid_or_fd = -1;
 static struct timespec last_kill_tm;
+enum vmpressure_level prev_level = VMPRESS_LEVEL_LOW;
 static bool monitors_initialized;
 static bool boot_completed_handled = false;
 
@@ -245,6 +246,8 @@ static struct psi_threshold psi_thresholds[VMPRESS_LEVEL_COUNT] = {
     { PSI_SOME, 100 },   /* 100ms out of 1sec for partial stall */
     { PSI_FULL, 70 },    /* 70ms out of 1sec for complete stall */
 };
+
+static uint64_t mp_event_count;
 
 static android_log_context ctx;
 static Reaper reaper;
@@ -2726,9 +2729,29 @@ static void mp_event_psi(int data, uint32_t events, struct polling_params *poll_
     long direct_reclaim_duration_ms;
     bool in_kswapd_reclaim;
 
+    mp_event_count++;
+    if (debug_process_killing) {
+        ALOGI("%s memory pressure event #%" PRIu64 " is triggered",
+              level_name[level], mp_event_count);
+    }
+
     if (clock_gettime(CLOCK_MONOTONIC_COARSE, &curr_tm) != 0) {
         ALOGE("Failed to get current time");
         return;
+    }
+
+    if (events > 0 ) {
+        /* Ignore a lower event within the first polling window. */
+        if (level < prev_level) {
+            if (debug_process_killing)
+                ALOGI("Ignoring %s pressure event; occurred too soon.",
+                       level_name[level]);
+            return;
+        }
+        prev_level = level;
+    } else {
+        /* Reset event level after the first polling window. */
+        prev_level = VMPRESS_LEVEL_LOW;
     }
 
     record_wakeup_time(&curr_tm, events ? Event : Polling, &wi);
@@ -3076,8 +3099,10 @@ static void mp_event_common(int data, uint32_t events, struct polling_params *po
     };
     static struct wakeup_info wi;
 
+    mp_event_count++;
     if (debug_process_killing) {
-        ALOGI("%s memory pressure event is triggered", level_name[level]);
+        ALOGI("%s memory pressure event #%" PRIu64 " is triggered",
+              level_name[level], mp_event_count);
     }
 
     if (!use_psi_monitors) {
@@ -3592,6 +3617,8 @@ static void kernel_event_handler(int data __unused, uint32_t events __unused,
 }
 
 static bool init_monitors() {
+    ALOGI("Wakeup counter is reset from %" PRIu64 " to 0", mp_event_count);
+    mp_event_count = 0;
     /* Try to use psi monitor first if kernel has it */
     use_psi_monitors = GET_LMK_PROPERTY(bool, "use_psi", true) &&
         init_psi_monitors();
@@ -3825,6 +3852,7 @@ static void call_handler(struct event_handler_info* handler_info,
          */
         poll_params->poll_start_tm = curr_tm;
         poll_params->poll_handler = handler_info;
+        poll_params->last_poll_tm = curr_tm;
         break;
     case POLLING_PAUSE:
         poll_params->paused_handler = handler_info;
