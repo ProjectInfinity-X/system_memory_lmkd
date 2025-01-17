@@ -2910,6 +2910,7 @@ update_watermarks:
         min_score_adj = pressure_after_kill_min_score;
         kill_reason = PRESSURE_AFTER_KILL;
         strncpy(kill_desc, "min watermark is breached even after kill", sizeof(kill_desc));
+        kill_desc[sizeof(kill_desc) - 1] = '\0';
     } else if (level == VMPRESS_LEVEL_CRITICAL && events != 0) {
         /*
          * Device is too busy reclaiming memory which might lead to ANR.
@@ -2918,6 +2919,7 @@ update_watermarks:
          */
         kill_reason = NOT_RESPONDING;
         strncpy(kill_desc, "device is not responding", sizeof(kill_desc));
+        kill_desc[sizeof(kill_desc) - 1] = '\0';
     } else if (swap_is_low && thrashing > thrashing_limit_pct) {
         /* Page cache is thrashing while swap is low */
         kill_reason = LOW_SWAP_AND_THRASHING;
