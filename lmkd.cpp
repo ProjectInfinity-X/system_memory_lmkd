@@ -214,6 +214,7 @@ static struct timespec last_kill_tm;
 enum vmpressure_level prev_level = VMPRESS_LEVEL_LOW;
 static bool monitors_initialized;
 static bool boot_completed_handled = false;
+static bool mem_event_update_zoneinfo_supported;
 
 /* lmkd configurable parameters */
 static bool debug_process_killing;
@@ -2638,6 +2639,8 @@ struct zone_watermarks {
     long min_wmark;
 };
 
+static struct zone_watermarks watermarks;
+
 /*
  * Returns lowest breached watermark or WMARK_NONE.
  */
@@ -2677,6 +2680,15 @@ void calc_zone_watermarks(struct zoneinfo *zi, struct zone_watermarks *watermark
     }
 }
 
+static int update_zoneinfo_watermarks(struct zoneinfo *zi) {
+    if (zoneinfo_parse(zi) < 0) {
+        ALOGE("Failed to parse zoneinfo!");
+        return -1;
+    }
+    calc_zone_watermarks(zi, &watermarks);
+    return 0;
+}
+
 static int calc_swap_utilization(union meminfo *mi) {
     int64_t swap_used = mi->field.total_swap - get_free_swap(mi);
     int64_t total_swappable = mi->field.active_anon + mi->field.inactive_anon +
@@ -2709,7 +2721,6 @@ static void __mp_event_psi(enum event_source source, union psi_event_data data,
     static int64_t init_pgrefill;
     static bool killing;
     static int thrashing_limit = thrashing_limit_pct;
-    static struct zone_watermarks watermarks;
     static struct timespec wmark_update_tm;
     static struct wakeup_info wi;
     static struct timespec thrashing_reset_tm;
@@ -2892,19 +2903,18 @@ static void __mp_event_psi(enum event_source source, union psi_event_data data,
 
 update_watermarks:
     /*
-     * Refresh watermarks once per min in case user updated one of the margins.
-     * TODO: b/140521024 replace this periodic update with an API for AMS to notify LMKD
-     * that zone watermarks were changed by the system software.
+     * Refresh watermarks:
+     * 1. watermarks haven't been initialized (high_wmark == 0)
+     * 2. per min in case user updated one of the margins if mem_event update_zoneinfo is NOT
+     *    supported.
      */
-    if (watermarks.high_wmark == 0 || get_time_diff_ms(&wmark_update_tm, &curr_tm) > 60000) {
+    if (watermarks.high_wmark == 0 || (!mem_event_update_zoneinfo_supported &&
+        get_time_diff_ms(&wmark_update_tm, &curr_tm) > 60000)) {
         struct zoneinfo zi;
 
-        if (zoneinfo_parse(&zi) < 0) {
-            ALOGE("Failed to parse zoneinfo!");
+        if (update_zoneinfo_watermarks(&zi) < 0) {
             return;
         }
-
-        calc_zone_watermarks(&zi, &watermarks);
         wmark_update_tm = curr_tm;
     }
 
@@ -3466,10 +3476,16 @@ static void memevent_listener_notification(int data __unused, uint32_t events __
                 kswapd_start_tm.tv_sec = 0;
                 kswapd_start_tm.tv_nsec = 0;
                 break;
-            case MEM_EVENT_VENDOR_LMK_KILL:
+            case MEM_EVENT_VENDOR_LMK_KILL: {
                 union psi_event_data event_data = {.vendor_event = mem_event};
                  __mp_event_psi(VENDOR, event_data, 0, poll_params);
                 break;
+            }
+            case MEM_EVENT_UPDATE_ZONEINFO: {
+                struct zoneinfo zi;
+                update_zoneinfo_watermarks(&zi);
+                break;
+            }
         }
     }
 }
@@ -3506,6 +3522,13 @@ static bool init_memevent_listener_monitoring() {
 
     if (!memevent_listener->registerEvent(MEM_EVENT_VENDOR_LMK_KILL)) {
         ALOGI("Failed to register android_vendor_kill memevents");
+    }
+
+    if (!memevent_listener->registerEvent(MEM_EVENT_UPDATE_ZONEINFO)) {
+        mem_event_update_zoneinfo_supported = false;
+        ALOGI("update_zoneinfo memevents are not supported");
+    } else {
+        mem_event_update_zoneinfo_supported = true;
     }
 
     int memevent_listener_fd = memevent_listener->getRingBufferFd();
