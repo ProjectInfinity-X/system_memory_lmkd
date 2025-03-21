@@ -2234,6 +2234,10 @@ static struct proc *proc_get_heaviest(int oomadj) {
     struct adjslot_list *curr = head->next;
     struct proc *maxprocp = NULL;
     int maxsize = 0;
+    if ((curr != head) && (curr->next == head)) {
+        // Our list only has one process.  No need to access procfs for its size.
+        return (struct proc *)curr;
+    }
     while (curr != head) {
         int pid = ((struct proc *)curr)->pid;
         int tasksize = proc_get_size(pid);
